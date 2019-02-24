@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using Elastic.Apm.Api;
+using Elastic.Apm.Helpers;
 using Newtonsoft.Json;
 
 namespace Elastic.Apm.Model.Payload
@@ -24,7 +25,13 @@ namespace Elastic.Apm.Model.Payload
 			Id = rnd.Next();
 		}
 
-		public string Action { get; set; }
+		private string _action;
+
+		public string Action
+		{
+			get => _action;
+			set => _action = value.TrimToMaxLength();
+		}
 
 		/// <summary>
 		/// Any other arbitrary data captured by the agent, optionally provided by the user.
@@ -46,12 +53,7 @@ namespace Elastic.Apm.Model.Payload
 		public string Name
 		{
 			get => _name;
-			set
-			{
-				if (value.Length > Consts.PropertyMaxLength)
-					value = $"{value.Substring(0, Consts.PropertyMaxLength-3)}...";
-				_name = value;
-			}
+			set => _name = value.TrimToMaxLength();
 		}
 
 		[JsonProperty("Stacktrace")]
@@ -59,13 +61,16 @@ namespace Elastic.Apm.Model.Payload
 
 		public decimal Start { get; set; }
 
-		public string Subtype { get; set; }
+		private string _subtype;
+
+		public string Subtype
+		{
+			get => _subtype;
+			set => _subtype = value.TrimToMaxLength();
+		}
 
 		[JsonIgnore]
 		public Dictionary<string, string> Tags => Context.Tags;
-
-		[JsonIgnore]
-		public Dictionary<string, object> Custom => Context.Custom;
 
 		internal Transaction Transaction;
 
@@ -89,24 +94,16 @@ namespace Elastic.Apm.Model.Payload
 		private class ContextImpl : IContext
 		{
 			private readonly Lazy<Dictionary<string, string>> _tags = new Lazy<Dictionary<string, string>>();
-			private readonly Lazy<Dictionary<string, object>> _custom = new Lazy<Dictionary<string, object>>();
 			public IDb Db { get; set; }
 			public IHttp Http { get; set; }
 			public Dictionary<string, string> Tags => _tags.Value;
-			public Dictionary<string, object> Custom => _custom.Value;
 		}
-	}
-
-	public interface IRequest
-	{
-		string Body { get; set; }
 	}
 	internal interface IContext
 	{
 		IDb Db { get; set; }
 		IHttp Http { get; set; }
 		Dictionary<string, string> Tags { get; }
-		Dictionary<string, object> Custom { get; }
 	}
 
 	internal interface IDb

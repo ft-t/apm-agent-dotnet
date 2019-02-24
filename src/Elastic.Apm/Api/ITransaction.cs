@@ -9,9 +9,14 @@ namespace Elastic.Apm.Api
 	public interface ITransaction
 	{
 		/// <summary>
-		/// Any arbitrary contextual information regarding the event, captured by the agent, optionally provided by the user.
+		/// If a log record was generated as a result of a http request, the http interface can be used to collect this information.
 		/// </summary>
 		IRequest Request { get; }
+
+		/// <summary>
+		/// User identification
+		/// </summary>
+		IUser User { get; }
 
 		/// <summary>
 		/// The duration of the transaction.
@@ -39,11 +44,6 @@ namespace Elastic.Apm.Api
 		/// A flat mapping of user-defined tags with string values.
 		/// </summary>
 		Dictionary<string, string> Tags { get; }
-
-		/// <summary>
-		/// A list of user defined custom fields.
-		/// </summary>
-		Dictionary<string, object> Custom { get; }
 
 		/// <summary>
 		/// The type of the transaction.
