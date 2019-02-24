@@ -104,6 +104,7 @@ namespace Elastic.Apm.Model.Payload
 			public Dictionary<string, object> Custom => _custom.Value;
 		}
 	}
+
 	internal interface IContext
 	{
 		IDb Db { get; set; }
