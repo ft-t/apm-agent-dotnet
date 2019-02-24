@@ -9,6 +9,7 @@ namespace Elastic.Apm.Model.Payload
 		private Request _request;
 		private Response _response;
 		private User _user;
+		private readonly Lazy<Dictionary<string, object>> custom = new Lazy<Dictionary<string, object>>();
 
 		public User User
 		{
@@ -28,5 +29,6 @@ namespace Elastic.Apm.Model.Payload
 		}
 
 		public Dictionary<string, string> Tags => _tags.Value;
+		public Dictionary<string, object> Custom => custom.Value;
 	}
 }

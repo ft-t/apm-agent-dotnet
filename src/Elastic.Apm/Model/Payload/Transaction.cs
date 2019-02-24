@@ -87,6 +87,9 @@ namespace Elastic.Apm.Model.Payload
 		[JsonIgnore]
 		public IUser User => Context.User;
 
+		[JsonIgnore]
+		public Dictionary<string, object> Custom => Context.Custom;
+
 		public string Timestamp => Start.ToString("yyyy-MM-ddTHH:mm:ss.FFFZ");
 
 		private string _type;
