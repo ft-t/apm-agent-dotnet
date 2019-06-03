@@ -5,9 +5,10 @@
 pipeline {
   agent any
   environment {
-    BASE_DIR="src/github.com/elastic/apm-agent-dotnet"
+    BASE_DIR = 'src/github.com/elastic/apm-agent-dotnet'
     NOTIFY_TO = credentials('notify-to')
     JOB_GCS_BUCKET = credentials('gcs-bucket')
+    CODECOV_SECRET = 'secret/apm-team/ci/apm-agent-dotnet-codecov'
   }
   options {
     timeout(time: 1, unit: 'HOURS')
@@ -27,9 +28,9 @@ pipeline {
   }
   stages {
     stage('Initializing'){
-      stages {
+      stages{
         stage('Checkout') {
-          agent { label 'linux && immutable' }
+          agent { label 'master || immutable' }
           options { skipDefaultCheckout() }
           steps {
             deleteDir()
@@ -44,20 +45,18 @@ pipeline {
               options { skipDefaultCheckout() }
               environment {
                 HOME = "${env.WORKSPACE}"
-                PATH = "${env.PATH}:${env.HOME}/bin:${env.HOME}/dotnet:${env.HOME}/.dotnet/tools"
                 DOTNET_ROOT = "${env.HOME}/dotnet"
+                PATH = "${env.PATH}:${env.HOME}/bin:${env.DOTNET_ROOT}:${env.HOME}/.dotnet/tools"
               }
               stages{
                 /**
                 Checkout the code and stash it, to use it on other stages.
                 */
-                stage('Install .Net SDK') {
+                stage('Install tools') {
                   steps {
                     deleteDir()
-                    sh label: 'Download and install .Net SDK', script: """#!/bin/bash
-                    curl -o dotnet.tar.gz -L https://download.microsoft.com/download/4/0/9/40920432-3302-47a8-b13c-bbc4848ad114/dotnet-sdk-2.1.302-linux-x64.tar.gz
-                    mkdir -p ${HOME}/dotnet && tar zxf dotnet.tar.gz -C ${HOME}/dotnet
-                    """
+                    unstash 'source'
+                    sh label: 'Install tools', script: "./${BASE_DIR}/.ci/linux/tools.sh"
                     stash allowEmpty: true, name: 'dotnet-linux', includes: "dotnet/**", useDefaultExcludes: false
                   }
                 }
@@ -71,7 +70,7 @@ pipeline {
                     }
                     unstash 'source'
                     dir("${BASE_DIR}"){
-                      sh 'dotnet build'
+                      sh './.ci/linux/build.sh'
                     }
                   }
                 }
@@ -85,89 +84,57 @@ pipeline {
                     }
                     unstash 'source'
                     dir("${BASE_DIR}"){
-                      sh label: 'Install tools', script: '''#!/bin/bash
-                      set -euxo pipefail
-                      # install tools
-                      dotnet tool install -g dotnet-xunit-to-junit --version 0.3.1
-                      for i in $(find . -name '*.csproj')
-                      do
-                        dotnet add "$i" package XunitXml.TestLogger --version 2.0.0
-                        dotnet add "$i" package coverlet.msbuild --version 2.5.1
-                      done
-                      '''
-
-                      sh label: 'Build', script: 'dotnet build'
-
-                      sh label: 'Test & coverage', script: '''#!/bin/bash
-                      set -euxo pipefail
-                      # run tests
-                      dotnet test -v n -r target -d target/diag.log --logger:"xunit" --no-build \
-                        /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura \
-                        /p:CoverletOutput=target/Coverage/ \
-                        /p:Exclude='"[Elastic.Apm.Tests]*,[SampleAspNetCoreApp*]*,[xunit*]*"' \
-                        /p:Threshold=0 /p:ThresholdType=branch /p:ThresholdStat=total \
-                        || echo -e "\033[31;49mTests FAILED\033[0m"
-                      '''
-
-                      sh label: 'Convert Test Results to junit format', script: '''#!/bin/bash
-                      set -euxo pipefail
-                      #convert xunit files to junit files
-                      for i in $(find . -name TestResults.xml)
-                      do
-                        DIR=$(dirname "$i")
-                        dotnet xunit-to-junit "$i" "${DIR}/junit-testTesults.xml"
-                      done
-                      '''
+                      sh label: 'Install test tools', script: './.ci/linux/test-tools.sh'
+                      sh label: 'Build', script: './.ci/linux/build.sh'
+                      sh label: 'Test & coverage', script: './.ci/linux/test.sh'
+                      sh label: 'Convert Test Results to junit format', script: './.ci/linux/convert.sh'
                     }
                   }
                   post {
                     always {
-                      junit(allowEmptyResults: true,
+                      junit(allowEmptyResults: false,
                         keepLongStdio: true,
                         testResults: "${BASE_DIR}/**/junit-*.xml,${BASE_DIR}/target/**/TEST-*.xml")
-                      codecov(repo: 'apm-agent-dotnet', basedir: "${BASE_DIR}")
+                      codecov(repo: 'apm-agent-dotnet', basedir: "${BASE_DIR}", secret: "${CODECOV_SECRET}")
                       }
                     }
                   }
                 }
               }
-              stage('Windows'){
+              stage('Windows .NET Framework'){
                 agent { label 'windows-2016' }
                 options { skipDefaultCheckout() }
                 environment {
                   HOME = "${env.WORKSPACE}"
                   DOTNET_ROOT = "${env.WORKSPACE}\\dotnet"
-                  PATH = "${env.PATH};${env.HOME}\\bin;${env.HOME}\\.dotnet\\tools;${env.DOTNET_ROOT};${env.DOTNET_ROOT}\\tools"
+                  VS_HOME = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Enterprise"
+                  MSBuildSDKsPath = "${env.DOTNET_ROOT}\\sdk\\2.1.505\\Sdks"
+                  PATH = "${env.PATH};${env.HOME}\\bin;${env.DOTNET_ROOT};${env.DOTNET_ROOT}\\tools;\"${env.VS_HOME}\\MSBuild\\15.0\\Bin\""
                 }
                 stages{
                   /**
                   Checkout the code and stash it, to use it on other stages.
                   */
-                  stage('Install .Net SDK') {
+                  stage('Install tools') {
                     steps {
                       deleteDir()
-                      dir("${HOME}/dotnet"){
-                        powershell label: 'Download .Net SDK', script: """
-                        Invoke-WebRequest https://download.visualstudio.microsoft.com/download/pr/c332d70f-6582-4471-96af-4b0c17a616ad/5f3043d4bc506bf91cb89fa90462bb58/dotnet-sdk-2.2.103-win-x64.zip -OutFile dotnet.zip
-                        """
-                        powershell label: 'Install .Net SDK', script: """
-                        Add-Type -As System.IO.Compression.FileSystem
-                        [IO.Compression.ZipFile]::ExtractToDirectory('dotnet.zip', '.')
-                        """
+                      unstash 'source'
+                      dir("${HOME}"){
+                        powershell label: 'Install tools', script: "${BASE_DIR}\\.ci\\windows\\tools.ps1"
                       }
                     }
                   }
                   /**
                   Build the project from code..
                   */
-                  stage('Build') {
+                  stage('Build - MSBuild') {
                     steps {
                       dir("${BASE_DIR}"){
                         deleteDir()
                       }
                       unstash 'source'
                       dir("${BASE_DIR}"){
-                        bat "dotnet build"
+                        bat '.ci/windows/msbuild.bat'
                       }
                     }
                   }
@@ -181,49 +148,85 @@ pipeline {
                       }
                       unstash 'source'
                       dir("${BASE_DIR}"){
-                        powershell label: 'Install tools', script: '''
-                        & dotnet tool install -g dotnet-xunit-to-junit --version 0.3.1
-                        & dotnet tool install -g Codecov.Tool --version 1.2.0
+                        powershell label: 'Install test tools', script: '.ci\\windows\\test-tools.ps1'
+                        bat label: 'Build', script: '.ci/windows/msbuild.bat'
+                        bat label: 'Test & coverage', script: '.ci/windows/test.bat'
+                        powershell label: 'Convert Test Results to junit format', script: '.ci\\windows\\convert.ps1'
 
-                        Get-ChildItem -Path . -Recurse -Filter *.csproj |
-                        Foreach-Object {
-                          & dotnet add $_.FullName package XunitXml.TestLogger --version 2.0.0
-                          & dotnet add $_.FullName package coverlet.msbuild --version 2.5.1
-                        }
-                        '''
-
-                        bat label: 'Build', script:'dotnet build'
-
-                        bat label: 'Test & Coverage', script: 'dotnet test -v n -r target -d target\\diag.log --logger:xunit --no-build /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=target\\Coverage\\ /p:Exclude=\\"[Elastic.Apm.Tests]*,[SampleAspNetCoreApp*]*,[xunit*]*\\" /p:Threshold=0 /p:ThresholdType=branch /p:ThresholdStat=total'
-
-                        powershell label: 'Convert Test Results to junit format', script: '''
-                        [System.Environment]::SetEnvironmentVariable("PATH", $Env:Path + ";" + $Env:USERPROFILE + "\\.dotnet\\tools")
-                        Get-ChildItem -Path . -Recurse -Filter TestResults.xml |
-                        Foreach-Object {
-                          & dotnet xunit-to-junit $_.FullName $_.parent.FullName + '\\junit-testTesults.xml'
-                        }
-                        '''
-
-                        script {
-                          def codecovId = getVaultSecret('apm-agent-dotnet-codecov')?.data?.value
-                          powershell label: 'Send covertura report to Codecov', script:"""
-                          [System.Environment]::SetEnvironmentVariable("PATH", \$Env:Path + ";" + \$Env:USERPROFILE + "\\.dotnet\\tools")
-                          Get-ChildItem -Path . -Recurse -Filter coverage.cobertura.xml |
-                          Foreach-Object {
-                            & codecov -t ${codecovId} -f \$_.FullName
-                          }
-                          """
-                        }
                       }
                     }
                     post {
                       always {
-                        junit(allowEmptyResults: true,
+                        junit(allowEmptyResults: false,
                           keepLongStdio: true,
                           testResults: "${BASE_DIR}/**/junit-*.xml,${BASE_DIR}/target/**/TEST-*.xml")
-                        }
                       }
                     }
+                  }
+                }
+              }
+              stage('Windows .NET Core'){
+                agent { label 'windows-2016' }
+                options { skipDefaultCheckout() }
+                environment {
+                  HOME = "${env.WORKSPACE}"
+                  DOTNET_ROOT = "${env.WORKSPACE}\\dotnet"
+                  VS_HOME = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Enterprise"
+                  MSBuildSDKsPath = "${env.DOTNET_ROOT}\\sdk\\2.1.505\\Sdks"
+                  PATH = "${env.PATH};${env.HOME}\\bin;${env.DOTNET_ROOT};${env.DOTNET_ROOT}\\tools;\"${env.VS_HOME}\\MSBuild\\15.0\\Bin\""
+                }
+                stages{
+                  /**
+                  Checkout the code and stash it, to use it on other stages.
+                  */
+                  stage('Install tools') {
+                    steps {
+                      deleteDir()
+                      unstash 'source'
+                      dir("${HOME}"){
+                        powershell label: 'Install tools', script: "${BASE_DIR}\\.ci\\windows\\tools.ps1"
+                      }
+                    }
+
+                  }
+                  /**
+                  Build the project from code..
+                  */
+                  stage('Build - dotnet') {
+                    steps {
+                      dir("${BASE_DIR}"){
+                        deleteDir()
+                      }
+                      unstash 'source'
+                      dir("${BASE_DIR}"){
+                        bat '.ci/windows/dotnet.bat'
+                      }
+                    }
+                  }
+                  /**
+                  Execute unit tests.
+                  */
+                  stage('Test') {
+                    steps {
+                      dir("${BASE_DIR}"){
+                        deleteDir()
+                      }
+                      unstash 'source'
+                      dir("${BASE_DIR}"){
+                        powershell label: 'Install test tools', script: '.ci\\windows\\test-tools.ps1'
+                        bat label: 'Build', script: '.ci/windows/dotnet.bat'
+                        bat label: 'Test & coverage', script: '.ci/windows/test.bat'
+                        powershell label: 'Convert Test Results to junit format', script: '.ci\\windows\\convert.ps1'
+                      }
+                    }
+                    post {
+                      always {
+                        junit(allowEmptyResults: false,
+                          keepLongStdio: true,
+                          testResults: "${BASE_DIR}/**/junit-*.xml,${BASE_DIR}/target/**/TEST-*.xml")
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -240,13 +243,10 @@ pipeline {
             when {
               beforeAgent true
               anyOf {
-                not {
-                  changeRequest()
-                }
                 branch 'master'
                 branch "\\d+\\.\\d+"
                 branch "v\\d?"
-                tag "v\\d+\\.\\d+\\.\\d+*"
+                tag "\\d+\\.\\d+\\.\\d+*"
                 expression { return params.Run_As_Master_Branch }
               }
             }
@@ -258,24 +258,18 @@ pipeline {
               }
             }
           }
-          stage('Release') {
+          stage('Release to AppVeyor') {
             agent { label 'linux && immutable' }
             options { skipDefaultCheckout() }
             environment {
               HOME = "${env.WORKSPACE}"
-              PATH = "${env.PATH}:${env.HOME}/bin:${env.HOME}/dotnet:${env.HOME}/.dotnet/tools"
               DOTNET_ROOT = "${env.HOME}/dotnet"
+              PATH = "${env.PATH}:${env.HOME}/bin:${env.DOTNET_ROOT}:${env.HOME}/.dotnet/tools"
             }
             when {
               beforeAgent true
               anyOf {
-                not {
-                  changeRequest()
-                }
                 branch 'master'
-                branch "\\d+\\.\\d+"
-                branch "v\\d?"
-                tag "v\\d+\\.\\d+\\.\\d+*"
                 expression { return params.Run_As_Master_Branch }
               }
             }
@@ -284,33 +278,69 @@ pipeline {
               unstash 'source'
               unstash('dotnet-linux')
               dir("${BASE_DIR}"){
-                sh label: 'Release', script: 'dotnet pack -c Release'
+                release('secret/apm-team/ci/elastic-observability-appveyor')
               }
             }
             post{
               success {
                 archiveArtifacts(allowEmptyArchive: true,
-                  artifacts: "${BASE_DIR}/bin/release/**/*",
+                  artifacts: "${BASE_DIR}/**/bin/Release/**/*.nupkg",
                   onlyIfSuccessful: true)
               }
             }
           }
-        }
-      }
-    }
-    post {
-      success {
-        echoColor(text: '[SUCCESS]', colorfg: 'green', colorbg: 'default')
-      }
-      aborted {
-        echoColor(text: '[ABORTED]', colorfg: 'magenta', colorbg: 'default')
-      }
-      failure {
-        echoColor(text: '[FAILURE]', colorfg: 'red', colorbg: 'default')
-        step([$class: 'Mailer', notifyEveryUnstableBuild: true, recipients: "${NOTIFY_TO}", sendToIndividuals: false])
-      }
-      unstable {
-        echoColor(text: '[UNSTABLE]', colorfg: 'yellow', colorbg: 'default')
+          stage('Release to NuGet') {
+            agent { label 'linux && immutable' }
+            options { skipDefaultCheckout() }
+            environment {
+              HOME = "${env.WORKSPACE}"
+              DOTNET_ROOT = "${env.HOME}/dotnet"
+              PATH = "${env.PATH}:${env.HOME}/bin:${env.DOTNET_ROOT}:${env.HOME}/.dotnet/tools"
+            }
+            when {
+              beforeAgent true
+              anyOf {
+                tag "\\d+\\.\\d+\\.\\d+*"
+                expression { return params.Run_As_Master_Branch }
+              }
+            }
+            steps {
+              input(message: 'Should we release a new version on NuGet?', ok: 'Yes, we should.')
+              deleteDir()
+              unstash 'source'
+              unstash('dotnet-linux')
+              dir("${BASE_DIR}"){
+                release('secret/apm-team/ci/elastic-observability-nuget')
+              }
+            }
+          }
       }
     }
   }
+  post {
+    success {
+      echoColor(text: '[SUCCESS]', colorfg: 'green', colorbg: 'default')
+    }
+    aborted {
+      echoColor(text: '[ABORTED]', colorfg: 'magenta', colorbg: 'default')
+    }
+    failure {
+      echoColor(text: '[FAILURE]', colorfg: 'red', colorbg: 'default')
+      step([$class: 'Mailer', notifyEveryUnstableBuild: true, recipients: "${NOTIFY_TO}", sendToIndividuals: false])
+    }
+    unstable {
+      echoColor(text: '[UNSTABLE]', colorfg: 'yellow', colorbg: 'default')
+    }
+  }
+}
+
+def release(secret){
+  sh(label: 'Release', script: './.ci/linux/release.sh')
+  def repo = getVaultSecret(secret: secret)
+  wrap([$class: 'MaskPasswordsBuildWrapper', varPasswordPairs: [
+    [var: 'REPO_API_KEY', password: repo.apiKey],
+    [var: 'REPO_API_URL', password: repo.url],
+    ]]) {
+      sh(label: 'Deploy', script: "./.ci/linux/deploy.sh ${repo.data.apiKey} ${repo.data.url}")
+    }
+}

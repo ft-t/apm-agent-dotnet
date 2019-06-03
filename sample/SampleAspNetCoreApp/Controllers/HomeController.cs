@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
@@ -6,6 +7,7 @@ using System.Threading.Tasks;
 using Elastic.Apm;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SampleAspNetCoreApp.Data;
 using SampleAspNetCoreApp.Models;
@@ -21,7 +23,7 @@ namespace SampleAspNetCoreApp.Controllers
 		public async Task<IActionResult> Index()
 		{
 			_sampleDataContext.Database.Migrate();
-			var model = _sampleDataContext.Users.Select(item => item.Name).ToList();
+			var model = _sampleDataContext.SampleTable.Select(item => item.Name).ToList();
 
 			try
 			{
@@ -40,13 +42,13 @@ namespace SampleAspNetCoreApp.Controllers
 		}
 
 		[HttpPost]
-		public async Task<IActionResult> AddNewUser([FromForm] string enteredName)
+		public async Task<IActionResult> AddSampleData([FromForm] string enteredName)
 		{
 			if (string.IsNullOrEmpty(enteredName))
 				throw new ArgumentNullException(nameof(enteredName));
 
-			_sampleDataContext.Users.Add(
-				new User
+			_sampleDataContext.SampleTable.Add(
+				new SampleData
 				{
 					Name = enteredName
 				});
@@ -62,6 +64,26 @@ namespace SampleAspNetCoreApp.Controllers
 			return View();
 		}
 
+		public async Task<IActionResult> DistributedTracingMiniSample()
+		{
+			var httpClient = new HttpClient();
+
+			try
+			{
+				var retVal = await httpClient.GetAsync("http://localhost:5050/api/values");
+
+				var resultInStr = await retVal.Content.ReadAsStringAsync();
+				var list = JsonConvert.DeserializeObject<List<string>>(resultInStr);
+				return View(list);
+			}
+			catch (Exception e)
+			{
+				ViewData["Fail"] =
+					$"Failed calling http://localhost:5050/api/values, make sure the WebApiSample listens on localhost:5050, {e.Message}";
+				return View();
+			}
+		}
+
 		public async Task<IActionResult> ChartPage()
 		{
 			var csvDataReader = new CsvDataReader($"Data{System.IO.Path.DirectorySeparatorChar}HistoricalData");
@@ -74,7 +96,7 @@ namespace SampleAspNetCoreApp.Controllers
 
 		public IActionResult Privacy() => View();
 
-		public IActionResult AddNewUser() => View();
+		public IActionResult AddSampleData() => View();
 
 		public async Task<IActionResult> FailingOutGoingHttpCall()
 		{
@@ -91,6 +113,11 @@ namespace SampleAspNetCoreApp.Controllers
 			throw new Exception("This is a test exception!");
 		}
 
+		//Used as test for optional route parameters
+		public IActionResult Sample(int id)
+		{
+			return Ok(id);
+		}
 
 		[ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
 		public IActionResult Error() => View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });

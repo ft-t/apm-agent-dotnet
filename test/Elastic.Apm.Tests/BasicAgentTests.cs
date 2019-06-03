@@ -10,7 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Elastic.Apm.Api;
 using Elastic.Apm.Logging;
-using Elastic.Apm.Model.Payload;
+using Elastic.Apm.Model;
 using Elastic.Apm.Report;
 using Elastic.Apm.Tests.Mocks;
 using FluentAssertions;
@@ -50,10 +50,13 @@ namespace Elastic.Apm.Tests
 		[Fact]
 		public async Task PayloadSentWithBearerToken()
 		{
+			var isRequestFinished = new TaskCompletionSource<object>();
+
 			AuthenticationHeaderValue authHeader = null;
 			var handler = new MockHttpMessageHandler((r, c) =>
 			{
 				authHeader = r.Headers.Authorization;
+				isRequestFinished.SetResult(null);
 				return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
 			});
 
@@ -65,9 +68,9 @@ namespace Elastic.Apm.Tests
 			using (var agent = new ApmAgent(new TestAgentComponents(secretToken: secretToken, payloadSender: payloadSender)))
 			{
 				agent.PayloadSender.QueueTransaction(new Transaction(agent, "TestName", "TestType"));
-				await payloadSender.FlushAndFinishAsync();
 			}
 
+			await isRequestFinished.Task;
 			authHeader.Should().NotBeNull();
 			authHeader.Scheme.Should().Be("Bearer");
 			authHeader.Parameter.Should().Be(secretToken);

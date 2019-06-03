@@ -1,5 +1,4 @@
-﻿using System;
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Elastic.Apm.DiagnosticSource;
@@ -27,7 +26,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 				{
 					n.Configure(app =>
 					{
-						app.UseElasticApm(agent, new HttpDiagnosticsSubscriber(), new EfCoreDiagnosticsSubscriber());
+						app.UseElasticApm(agent,  agent.Logger, new HttpDiagnosticsSubscriber(), new EfCoreDiagnosticsSubscriber());
 
 						app.UseDeveloperExceptionPage();
 
@@ -36,6 +35,8 @@ namespace Elastic.Apm.AspNetCore.Tests
 						app.UseHttpsRedirection();
 						app.UseStaticFiles();
 						app.UseCookiePolicy();
+
+						app.UseAuthentication();
 
 						app.UseMvc(routes =>
 						{
@@ -55,7 +56,9 @@ namespace Elastic.Apm.AspNetCore.Tests
 				{
 					n.Configure(app =>
 					{
-						app.UseElasticApm(agent);
+						app.UseElasticApm(agent, agent.Logger);
+
+						app.UseAuthentication();
 
 						app.UseMvc(routes =>
 						{
@@ -77,7 +80,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 				{
 					n.Configure(app =>
 					{
-						app.UseMiddleware<ApmMiddleware>(agent.Tracer, agent.ConfigurationReader);
+						app.UseMiddleware<ApmMiddleware>(agent.Tracer, agent);
 
 						app.UseDeveloperExceptionPage();
 
@@ -86,6 +89,8 @@ namespace Elastic.Apm.AspNetCore.Tests
 						app.UseHttpsRedirection();
 						app.UseStaticFiles();
 						app.UseCookiePolicy();
+
+						app.UseAuthentication();
 
 						app.UseMvc(routes =>
 						{
@@ -101,16 +106,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 
 		internal static void ConfigureServices(IServiceCollection services)
 		{
-			services.Configure<CookiePolicyOptions>(options =>
-			{
-				options.CheckConsentNeeded = context => true;
-				options.MinimumSameSitePolicy = SameSiteMode.None;
-			});
-
-			var connection = @"Data Source=blogging.db";
-			services.AddDbContext<SampleDataContext>
-				(options => options.UseSqlite(connection));
-
+			SampleAspNetCoreApp.Startup.ConfigureServicesExceptMvc(services);
 			services.AddMvc()
 				//this is needed because of a (probably) bug:
 				//https://github.com/aspnet/Mvc/issues/5992

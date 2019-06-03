@@ -2,7 +2,7 @@
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Elastic.Apm.Model.Payload;
+using Elastic.Apm.Model;
 using Elastic.Apm.Tests.Mocks;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -34,7 +34,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 				var capturedPayload = agent.PayloadSender as MockPayloadSender;
 				var client = Helper.GetClient(agent, _factory);
 
-				var response = await client.GetAsync("/Home/TriggerError");
+				await client.GetAsync("/Home/TriggerError");
 
 				capturedPayload.Should().NotBeNull();
 
@@ -47,7 +47,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 				errorException.Type.Should().Be(typeof(Exception).FullName);
 
 				var context = capturedPayload.FirstError.Context;
-				context.Request.Url.Full.Should().Be("/Home/TriggerError");
+				context.Request.Url.Full.Should().Be("http://localhost/Home/TriggerError");
 				context.Request.Method.Should().Be(HttpMethod.Get.Method);
 
 				errorException.Should().NotBeNull();

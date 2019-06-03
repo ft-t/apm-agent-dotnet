@@ -12,9 +12,8 @@ using System.Threading.Tasks.Dataflow;
 using Elastic.Apm.Api;
 using Elastic.Apm.Config;
 using Elastic.Apm.Logging;
-using Elastic.Apm.Model.Payload;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Serialization;
+using Elastic.Apm.Model;
+using Elastic.Apm.Report.Serialization;
 
 namespace Elastic.Apm.Report
 {
@@ -26,11 +25,8 @@ namespace Elastic.Apm.Report
 	{
 		private static readonly int DnsTimeout = (int)TimeSpan.FromMinutes(1).TotalMilliseconds;
 
-		private readonly Task _creation;
-
 		private readonly BatchBlock<object> _eventQueue =
-			new BatchBlock<object>(20, new GroupingDataflowBlockOptions
-				{ BoundedCapacity = 1_000_000 });
+			new BatchBlock<object>(20);
 
 		private readonly HttpClient _httpClient;
 		private readonly IApmLogger _logger;
@@ -39,13 +35,12 @@ namespace Elastic.Apm.Report
 
 		private CancellationTokenSource _batchBlockReceiveAsyncCts;
 
-		private readonly JsonSerializerSettings _settings;
+		private readonly PayloadItemSerializer _payloadItemSerializer = new PayloadItemSerializer();
 
 		private readonly SingleThreadTaskScheduler _singleThreadTaskScheduler = new SingleThreadTaskScheduler(CancellationToken.None);
 
 		public PayloadSenderV2(IApmLogger logger, IConfigurationReader configurationReader, Service service, HttpMessageHandler handler = null)
 		{
-			_settings = new JsonSerializerSettings { ContractResolver = new CamelCasePropertyNamesContractResolver(), Formatting = Formatting.None };
 			_service = service;
 			_logger = logger?.Scoped(nameof(PayloadSenderV2));
 
@@ -55,22 +50,21 @@ namespace Elastic.Apm.Report
 			servicePoint.ConnectionLeaseTimeout = DnsTimeout;
 			servicePoint.ConnectionLimit = 20;
 
-			_httpClient = new HttpClient(handler ?? new HttpClientHandler())
-			{
-				BaseAddress = serverUrlBase
-			};
+			_httpClient = new HttpClient(handler ?? new HttpClientHandler()) { BaseAddress = serverUrlBase };
 
 			if (configurationReader.SecretToken != null)
 			{
 				_httpClient.DefaultRequestHeaders.Authorization =
 					new AuthenticationHeaderValue("Bearer", configurationReader.SecretToken);
 			}
-			_creation = Task.Factory.StartNew(
+			Task.Factory.StartNew(
 				() =>
 				{
 					try
 					{
-						_worker = DoWork();
+#pragma warning disable 4014
+						DoWork();
+#pragma warning restore 4014
 					}
 					catch (TaskCanceledException ex)
 					{
@@ -79,48 +73,20 @@ namespace Elastic.Apm.Report
 				}, CancellationToken.None, TaskCreationOptions.LongRunning, _singleThreadTaskScheduler);
 		}
 
-		private Task _worker;
-
 		public void QueueTransaction(ITransaction transaction)
 		{
-			_eventQueue.Post(transaction);
+			var res = _eventQueue.Post(transaction);
+			_logger.Debug()
+				?.Log(!res
+					? "Failed adding Transaction to the queue, {Transaction}"
+					: "Transaction added to the queue, {Transaction}", transaction);
+
 			_eventQueue.TriggerBatch();
 		}
 
 		public void QueueSpan(ISpan span) => _eventQueue.Post(span);
 
 		public void QueueError(IError error) => _eventQueue.Post(error);
-
-		/// <summary>
-		/// Flushes all the events and ends the loop that processes and sends the events.
-		/// This can be called only once and after that the instance won't process anything.
-		/// </summary>
-		internal async Task FlushAndFinishAsync()
-		{
-			_logger.Debug()?.Log("FlushAndFinish called - PayloadSenderV2 will become invalid");
-			await _creation;
-			_eventQueue.TriggerBatch();
-
-			_batchBlockReceiveAsyncCts.Cancel();
-
-			try
-			{
-				await _worker;
-			}
-			catch (TaskCanceledException)
-			{
-				_logger.Debug()?.Log("worker task cancelled");
-			}
-			finally
-			{
-				_batchBlockReceiveAsyncCts.Dispose();
-			}
-
-			if (_eventQueue.TryReceiveAll(out var queueItems))
-				await ProcessQueueItems(queueItems.SelectMany(n => n).ToArray());
-
-			_eventQueue.Complete();
-		}
 
 		private async Task DoWork()
 		{
@@ -138,28 +104,29 @@ namespace Elastic.Apm.Report
 			try
 			{
 				var metadata = new Metadata { Service = _service };
-				var metadataJson = JsonConvert.SerializeObject(metadata, _settings);
-				var json = new StringBuilder();
-				json.Append("{\"metadata\": " + metadataJson + "}" + "\n");
+				var metadataJson = _payloadItemSerializer.SerializeObject(metadata);
+				var ndjson = new StringBuilder();
+				ndjson.Append("{\"metadata\": " + metadataJson + "}" + "\n");
 
 				foreach (var item in queueItems)
 				{
-					var serialized = JsonConvert.SerializeObject(item, _settings);
+					var serialized = _payloadItemSerializer.SerializeObject(item);
 					switch (item)
 					{
 						case Transaction _:
-							json.AppendLine("{\"transaction\": " + serialized + "}");
+							ndjson.AppendLine("{\"transaction\": " + serialized + "}");
 							break;
 						case Span _:
-							json.AppendLine("{\"span\": " + serialized + "}");
+							ndjson.AppendLine("{\"span\": " + serialized + "}");
 							break;
 						case Error _:
-							json.AppendLine("{\"error\": " + serialized + "}");
+							ndjson.AppendLine("{\"error\": " + serialized + "}");
 							break;
 					}
+					_logger?.Trace()?.Log("Serialized item to send: {ItemToSend} as {SerializedItemToSend}", item, serialized);
 				}
 
-				var content = new StringContent(json.ToString(), Encoding.UTF8, "application/x-ndjson");
+				var content = new StringContent(ndjson.ToString(), Encoding.UTF8, "application/x-ndjson");
 
 				var result = await _httpClient.PostAsync(Consts.IntakeV2Events, content);
 

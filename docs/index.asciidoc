@@ -1,4 +1,3 @@
-= APM .NET Agent Reference (Prototype)
 :branch: current
 :server-branch: 6.5
 include::{asciidoc-dir}/../../shared/attributes.asciidoc[]
@@ -8,8 +7,10 @@ NOTE: For the best reading experience,
 please view this documentation at https://www.elastic.co/guide/en/apm/agent/dotnet[elastic.co]
 endif::[]
 
-ifndef::env-github[]
+= APM .NET Agent Reference (Prototype)
+
 include::./intro.asciidoc[Introduction]
+include::./setup.asciidoc[Set Up]
 include::./configuration.asciidoc[Configuration]
 include::./public-api.asciidoc[API documentation]
-endif::[]
+include::./release-notes.asciidoc[Release notes]

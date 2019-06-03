@@ -1,14 +1,15 @@
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Reflection;
 using System.Threading.Tasks;
-using Elastic.Apm.Model.Payload;
+using Elastic.Apm.Config;
+using Elastic.Apm.Model;
 using Elastic.Apm.Tests.Mocks;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using SampleAspNetCoreApp;
 using Xunit;
-using Xunit.Sdk;
 
 namespace Elastic.Apm.AspNetCore.Tests
 {
@@ -54,9 +55,9 @@ namespace Elastic.Apm.AspNetCore.Tests
 			_capturedPayload.Transactions.Should().ContainSingle();
 
 			_agent.Service.Name.Should().NotBeNullOrWhiteSpace()
-				.And.Be(Assembly.GetEntryAssembly()?.GetName()?.Name);
+				.And.NotBe(ConfigConsts.DefaultValues.UnknownServiceName);
 
-			_agent.Service.Agent.Name.Should().Be(Consts.AgentName);
+			_agent.Service.Agent.Name.Should().Be(Elastic.Apm.Consts.AgentName);
 			var apmVersion = Assembly.Load("Elastic.Apm").GetName().Version.ToString();
 			_agent.Service.Agent.Version.Should().Be(apmVersion);
 
@@ -67,7 +68,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 
 			_capturedPayload.Transactions.Should().ContainSingle();
 			var transaction = _capturedPayload.FirstTransaction;
-			var transactionName = $"{response.RequestMessage.Method} {response.RequestMessage.RequestUri.AbsolutePath}";
+			var transactionName = $"{response.RequestMessage.Method} Home/SimplePage";
 			transaction.Name.Should().Be(transactionName);
 			transaction.Result.Should().Be("HTTP 2xx");
 			transaction.Duration.Should().BeGreaterThan(0);
@@ -91,7 +92,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 			transaction.Context.Request.Method.Should().Be("GET");
 
 			//test transaction.context.request.url
-			transaction.Context.Request.Url.Full.Should().Be(response.RequestMessage.RequestUri.AbsolutePath);
+			transaction.Context.Request.Url.Full.Should().Be(response.RequestMessage.RequestUri.AbsoluteUri);
 			transaction.Context.Request.Url.HostName.Should().Be("localhost");
 			transaction.Context.Request.Url.Protocol.Should().Be("HTTP");
 

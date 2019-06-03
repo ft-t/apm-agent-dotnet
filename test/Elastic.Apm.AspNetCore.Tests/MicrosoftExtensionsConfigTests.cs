@@ -34,6 +34,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 			config.ServerUrls[0].Should().Be(new Uri("http://myServerFromTheConfigFile:8080"));
 			config.ServiceName.Should().Be("My_Test_Application");
 			config.CaptureHeaders.Should().Be(false);
+			config.TransactionSampleRate.Should().Be(0.456);
 		}
 
 		/// <summary>
@@ -46,18 +47,19 @@ namespace Elastic.Apm.AspNetCore.Tests
 			var logger = new TestLogger();
 			var config = new MicrosoftExtensionsConfig(GetConfig($"TestConfigs{Path.DirectorySeparatorChar}appsettings_invalid.json"), logger);
 			config.LogLevel.Should().Be(LogLevel.Error);
-
-			config.CaptureHeaders.Should().Be(true);
-
 			logger.Lines.Should().NotBeEmpty();
 			logger.Lines[0].Should()
 				.ContainAll(
 					$"{{{nameof(MicrosoftExtensionsConfig)}}}",
 					"Failed parsing log level from",
 					MicrosoftExtensionsConfig.Origin,
-					MicrosoftExtensionsConfig.Keys.Level,
+					MicrosoftExtensionsConfig.Keys.LogLevel,
 					"Defaulting to "
 				);
+
+			config.CaptureHeaders.Should().Be(true);
+
+			config.TransactionSampleRate.Should().Be(1.0);
 		}
 
 		/// <summary>
@@ -77,7 +79,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 					$"{{{nameof(MicrosoftExtensionsConfig)}}}",
 					"Failed parsing log level from",
 					MicrosoftExtensionsConfig.Origin,
-					MicrosoftExtensionsConfig.Keys.Level,
+					MicrosoftExtensionsConfig.Keys.LogLevel,
 					"Defaulting to ",
 					"DbeugMisspelled"
 				);
@@ -90,15 +92,15 @@ namespace Elastic.Apm.AspNetCore.Tests
 		[Fact]
 		public void ReadConfingsFromEnvVarsViaIConfig()
 		{
-			Environment.SetEnvironmentVariable(ConfigConsts.ConfigKeys.Level, "Debug");
+			Environment.SetEnvironmentVariable(ConfigConsts.EnvVarNames.LogLevel, "Debug");
 			var serverUrl = "http://myServerFromEnvVar.com:1234";
-			Environment.SetEnvironmentVariable(ConfigConsts.ConfigKeys.Urls, serverUrl);
+			Environment.SetEnvironmentVariable(ConfigConsts.EnvVarNames.ServerUrls, serverUrl);
 			var serviceName = "MyServiceName123";
-			Environment.SetEnvironmentVariable(ConfigConsts.ConfigKeys.ServiceName, serviceName);
+			Environment.SetEnvironmentVariable(ConfigConsts.EnvVarNames.ServiceName, serviceName);
 			var secretToken = "SecretToken";
-			Environment.SetEnvironmentVariable(ConfigConsts.ConfigKeys.SecretToken, secretToken);
-			var captureHeaders = false;
-			Environment.SetEnvironmentVariable(ConfigConsts.ConfigKeys.CaptureHeaders, captureHeaders.ToString());
+			Environment.SetEnvironmentVariable(ConfigConsts.EnvVarNames.SecretToken, secretToken);
+			Environment.SetEnvironmentVariable(ConfigConsts.EnvVarNames.CaptureHeaders, false.ToString());
+			Environment.SetEnvironmentVariable(ConfigConsts.EnvVarNames.TransactionSampleRate, "0.123");
 			var configBuilder = new ConfigurationBuilder()
 				.AddEnvironmentVariables()
 				.Build();
@@ -108,7 +110,8 @@ namespace Elastic.Apm.AspNetCore.Tests
 			config.ServerUrls[0].Should().Be(new Uri(serverUrl));
 			config.ServiceName.Should().Be(serviceName);
 			config.SecretToken.Should().Be(secretToken);
-			config.CaptureHeaders.Should().Be(captureHeaders);
+			config.CaptureHeaders.Should().Be(false);
+			config.TransactionSampleRate.Should().Be(0.123);
 		}
 
 		/// <summary>
@@ -142,7 +145,7 @@ namespace Elastic.Apm.AspNetCore.Tests
 		{
 			_factory = factory;
 			_logger = new TestLogger();
-			_capturedPayload = new MockPayloadSender();
+			var capturedPayload = new MockPayloadSender();
 
 			//The agent is instantiated with ApmMiddlewareExtension.GetService, so we can also test the calculation of the service instance.
 			//(e.g. ASP.NET Core version)
@@ -151,12 +154,11 @@ namespace Elastic.Apm.AspNetCore.Tests
 				MicrosoftExtensionsConfigTests.GetConfig($"TestConfigs{Path.DirectorySeparatorChar}appsettings_invalid.json"), _logger);
 
 			_agent = new ApmAgent(
-				new AgentComponents(payloadSender: _capturedPayload, configurationReader: config, logger: _logger));
+				new AgentComponents(payloadSender: capturedPayload, configurationReader: config, logger: _logger));
 			_client = Helper.GetClient(_agent, _factory);
 		}
 
 		private readonly ApmAgent _agent;
-		private readonly MockPayloadSender _capturedPayload;
 		private readonly HttpClient _client;
 		private readonly WebApplicationFactory<Startup> _factory;
 		private readonly TestLogger _logger;

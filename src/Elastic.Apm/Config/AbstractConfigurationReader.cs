@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using Elastic.Apm.Logging;
 
@@ -10,9 +11,9 @@ namespace Elastic.Apm.Config
 	{
 		protected AbstractConfigurationReader(IApmLogger logger) => ScopedLogger = logger?.Scoped(GetType().Name);
 
-		private ScopedLogger ScopedLogger { get; }
-
 		protected IApmLogger Logger => ScopedLogger;
+
+		private ScopedLogger ScopedLogger { get; }
 
 		protected static ConfigurationKeyValue Kv(string key, string value, string origin) =>
 			new ConfigurationKeyValue(key, value, origin);
@@ -21,6 +22,7 @@ namespace Elastic.Apm.Config
 		{
 			level = null;
 			if (string.IsNullOrEmpty(value)) return false;
+
 			level = DefaultLogLevel();
 			return level != null;
 
@@ -44,6 +46,7 @@ namespace Elastic.Apm.Config
 		protected string ParseSecretToken(ConfigurationKeyValue kv)
 		{
 			if (kv == null || string.IsNullOrEmpty(kv.Value)) return null;
+
 			return kv.Value;
 		}
 
@@ -51,6 +54,7 @@ namespace Elastic.Apm.Config
 		{
 			if (kv == null || string.IsNullOrEmpty(kv.Value)) return true;
 			if (bool.TryParse(kv.Value, out var value)) return value;
+
 			return true;
 		}
 
@@ -62,8 +66,9 @@ namespace Elastic.Apm.Config
 				Logger?.Debug()?.Log("No log level provided. Defaulting to log level '{DefaultLogLevel}'", ConsoleLogger.DefaultLogLevel);
 			else
 			{
-				Logger?.Error()?.Log("Failed parsing log level from {Origin}: {Key}, value: {Value}. Defaulting to log level '{DefaultLogLevel}'",
-					kv.ReadFrom, kv.Key, kv.Value, ConsoleLogger.DefaultLogLevel);
+				Logger?.Error()
+					?.Log("Failed parsing log level from {Origin}: {Key}, value: {Value}. Defaulting to log level '{DefaultLogLevel}'",
+						kv.ReadFrom, kv.Key, kv.Value, ConsoleLogger.DefaultLogLevel);
 			}
 
 			return ConsoleLogger.DefaultLogLevel;
@@ -106,60 +111,132 @@ namespace Elastic.Apm.Config
 			}
 		}
 
+		protected virtual string DiscoverServiceName()
+		{
+			var entryAssemblyName = Assembly.GetEntryAssembly()?.GetName();
+			if (entryAssemblyName != null && !IsMsOrElastic(entryAssemblyName.GetPublicKeyToken()))
+				return entryAssemblyName.Name;
+
+			var stackFrames = new StackTrace().GetFrames();
+			if (stackFrames == null) return null;
+
+			foreach (var frame in stackFrames)
+			{
+				var currentAssemblyName = frame?.GetMethod()?.DeclaringType?.Assembly?.GetName();
+				if (currentAssemblyName != null && !IsMsOrElastic(currentAssemblyName.GetPublicKeyToken())) return currentAssemblyName.Name;
+			}
+
+			return null;
+		}
+
+		private string AdaptServiceName(string originalName) => originalName?.Replace('.', '_');
+
 		protected string ParseServiceName(ConfigurationKeyValue kv)
 		{
-			var retVal = kv.Value;
-			if (string.IsNullOrEmpty(retVal))
+			var nameInConfig = kv.Value;
+			if (!string.IsNullOrEmpty(nameInConfig))
 			{
-				Logger?.Info()?.Log("The agent was started without a service name. The service name will be automatically calculated.");
-				retVal = Assembly.GetEntryAssembly()?.GetName().Name;
-				Logger?.Info()?.Log("The agent was started without a service name. The Service name sis {ServiceName}", retVal);
-			}
-
-			if (string.IsNullOrEmpty(retVal))
-			{
-				var stackFrames = new StackTrace().GetFrames();
-				foreach (var frame in stackFrames)
+				var adaptedServiceName = AdaptServiceName(nameInConfig);
+				if (nameInConfig == adaptedServiceName)
+					Logger?.Warning()?.Log("Service name provided in configuration is {ServiceName}", nameInConfig);
+				else
 				{
-					var currentAssembly = frame.GetMethod()?.DeclaringType.Assembly;
-					var token = currentAssembly.GetName().GetPublicKeyToken();
-					if (currentAssembly != null
-						&& !IsMsOrElastic(currentAssembly.GetName().GetPublicKeyToken()))
-					{
-						retVal = currentAssembly.GetName().Name;
-						break;
-					}
+					Logger?.Warning()
+						?.Log("Service name provided in configuration ({ServiceNameInConfiguration}) was adapted to {ServiceName}", nameInConfig,
+							adaptedServiceName);
 				}
+				return adaptedServiceName;
 			}
 
-			if (string.IsNullOrEmpty(retVal))
+			Logger?.Info()?.Log("The agent was started without a service name. The service name will be automatically discovered.");
+
+			var discoveredName = AdaptServiceName(DiscoverServiceName());
+			if (discoveredName != null)
 			{
-				Logger?.Error()?.Log("Failed calculating service name, the service name will be 'unknown'." +
-					" You can fix this by setting the service name to a specific value (e.g. by using the environment variable {ServiceNameVariable})", ConfigConsts.ConfigKeys.ServiceName);
-				retVal = "unknown";
+				Logger?.Info()
+					?.Log("The agent was started without a service name. The automatically discovered service name is {ServiceName}", discoveredName);
+				return discoveredName;
 			}
 
-			return retVal.Replace('.', '_');
+			Logger?.Error()
+				?.Log("Failed to discover service name, the service name will be '{DefaultServiceName}'." +
+					" You can fix this by setting the service name to a specific value (e.g. by using the environment variable {ServiceNameVariable})",
+					ConfigConsts.DefaultValues.UnknownServiceName, ConfigConsts.EnvVarNames.ServiceName);
+			return ConfigConsts.DefaultValues.UnknownServiceName;
+		}
+
+		private static bool TryParseFloatingPoint(string valueAsString, out double result) =>
+			double.TryParse(valueAsString, NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+
+		protected double ParseTransactionSampleRate(ConfigurationKeyValue kv)
+		{
+			if (kv?.Value == null)
+			{
+				Logger?.Debug()
+					?.Log("No transaction sample rate provided. Defaulting to '{DefaultTransactionSampleRate}'",
+						ConfigConsts.DefaultValues.TransactionSampleRate);
+				return ConfigConsts.DefaultValues.TransactionSampleRate;
+			}
+
+			if (!TryParseFloatingPoint(kv.Value, out var parsedValue))
+			{
+				Logger?.Error()
+					?.Log("Failed to parse provided transaction sample rate `{ProvidedTransactionSampleRate}' - " +
+						"using default: {DefaultTransactionSampleRate}",
+						kv.Value,
+						ConfigConsts.DefaultValues.TransactionSampleRate);
+				return ConfigConsts.DefaultValues.TransactionSampleRate;
+			}
+
+			if (!Sampler.IsValidRate(parsedValue))
+			{
+				Logger?.Error()
+					?.Log(
+						"Provided transaction sample rate is invalid {ProvidedTransactionSampleRate} - " +
+						"using default: {DefaultTransactionSampleRate}",
+						parsedValue,
+						ConfigConsts.DefaultValues.TransactionSampleRate);
+				return ConfigConsts.DefaultValues.TransactionSampleRate;
+			}
+
+			Logger?.Debug()
+				?.Log("Using provided transaction sample rate `{ProvidedTransactionSampleRate}' parsed as {ProvidedTransactionSampleRate}",
+					kv.Value,
+					parsedValue);
+			return parsedValue;
 		}
 
 		internal static bool IsMsOrElastic(byte[] array)
 		{
 			var elasticToken = new byte[] { 174, 116, 0, 210, 193, 137, 207, 34 };
 			var mscorlibToken = new byte[] { 183, 122, 92, 86, 25, 52, 224, 137 };
+			var systemWebToken = new byte[] { 176, 63, 95, 127, 17, 213, 10, 58 };
+			var systemPrivateCoreLibToken = new byte[] { 124, 236, 133, 215, 190, 167, 121, 142 };
+			var msAspNetCoreHostingToken = new byte[] { 173, 185, 121, 56, 41, 221, 174, 96 };
 
 			if (array.Length != 8)
 				return false;
 
 			var isMsCorLib = true;
 			var isElasticApm = true;
+			var isSystemWeb = true;
+			var isSystemPrivateCoreLib = true;
+			var isMsAspNetCoreHosting = true;
+
 			for (var i = 0; i < 8; i++)
 			{
 				if (array[i] != elasticToken[i])
 					isElasticApm = false;
 				if (array[i] != mscorlibToken[i])
 					isMsCorLib = false;
+				if (array[i] != systemWebToken[i])
+					isSystemWeb = false;
+				if (array[i] != systemPrivateCoreLibToken[i])
+					isSystemPrivateCoreLib = false;
+				if (array[i] != msAspNetCoreHostingToken[i])
+					isMsAspNetCoreHosting = false;
 
-				if (!isMsCorLib && !isElasticApm)
+				if (!isMsCorLib && !isElasticApm && !isSystemWeb && !isSystemPrivateCoreLib && !isMsAspNetCoreHosting)
 					return false;
 			}
 
